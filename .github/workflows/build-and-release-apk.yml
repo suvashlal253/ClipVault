@@ -1,0 +1,80 @@
+name: Build & Release ClipVault APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK and Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Debug APK
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
+
+      - name: Prepare APK Asset
+        run: |
+          mkdir -p release-artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk release-artifacts/ClipVault-v1.0.0.apk
+          echo "Built APK successfully: $(ls -lh release-artifacts/ClipVault-v1.0.0.apk)"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-v1.0.0-APK
+          path: release-artifacts/ClipVault-v1.0.0.apk
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: "ClipVault v1.0.0 - Production APK Release"
+          body: |
+            ## 🎉 ClipVault Android v1.0.0 Release
+
+            Unlimited Android Clipboard Manager built with **Kotlin** and **Jetpack Compose**.
+
+            ### 📦 Download & Install:
+            - **[ClipVault-v1.0.0.apk](https://github.com/suvashlal253/ClipVault/releases/download/v1.0.0/ClipVault-v1.0.0.apk)**
+
+            ### ✨ Key Features:
+            - **Room Database + SQLite FTS4**: Instant full-text search across unlimited history.
+            - **Android 10 - 15 Background Auto-Capture**: Elevated `AccessibilityService` to capture copied text across any app.
+            - **Smart Categorization Engine**: Automatic regex & Shannon entropy categorization for URLs, Code, 2FA/OTPs, Phone numbers, Emails, and Hex Colors.
+            - **Hardware-backed Biometric Vault**: AES-256 GCM encryption via Android Keystore.
+            - **Pinned & Favorites**: Priority sorting for pinned clips.
+            - **Quick Settings Tile**: 1-Tap fast capture from notification shade.
+
+            ### 👤 Developer Info:
+            - **Developer:** Suvash Purkaystha
+            - **Role:** AI Developer & Vibe Coder
+            - **Bio:** Passionate creator building smart, user-centric Android applications.
+          files: release-artifacts/ClipVault-v1.0.0.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
