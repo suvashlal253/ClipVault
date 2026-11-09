@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ClipVault</string>
+    <string name="tile_clip_capture">Clip Capture</string>
+    <string name="accessibility_service_description">Monitors system clipboard in background to auto-save copied text into your secure ClipVault history.</string>
+</resources>
