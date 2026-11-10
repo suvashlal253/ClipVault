@@ -1,0 +1,79 @@
+name: Build & Release ClipVault APK
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK and Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+
+
+      - name: Prepare APK Asset
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.9.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.8.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.7.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.6.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.5.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.4.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.0.apk
+          echo "APK prepared successfully: $(ls -lh release-assets)"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-APK
+          path: release-assets/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.9
+          name: "ClipVault v1.0.9 - Official Custom Launcher App Icon, Smart EMAIL Detection & Badge, Crisp Light Mode & Vault Editor"
+          body: |
+            ### 🚀 ClipVault v1.0.9 Release (Build 10)
+
+            New custom launcher icon, smart email classification, and UI enhancements in this release:
+            - **1. Official Custom ClipVault Launcher Icon:** Added full multi-density Android launcher icons (`mipmap-mdpi` to `mipmap-xxxhdpi` `ic_launcher.png`, `ic_launcher_round.png`, and adaptive `ic_launcher_foreground.png`) plus in-app TopAppBar brand icon (`R.drawable.clipvault_app_icon`).
+            - **2. Smart EMAIL Auto-Classification & Coral-Rose Badge:** Fixed email regex pattern compilation (`EMAIL_EXACT_PATTERN` & `EMAIL_FIND_PATTERN`) so copied email addresses are immediately identified as `EMAIL` with a dedicated Coral-Rose badge and 1-tap `mailto:` action.
+            - **3. Crisp Light Mode (White Version) & Signature Dark Mode:** Clean `#F8F9FA` light backgrounds, pure `#FFFFFF` elevated cards, and `#1A1C1E` deep charcoal typography alongside the signature Dark Mode.
+            - **4. Enlarged Clip Editor (Home + Secure Vault) & Clear History Guard:** Full multi-line editor with AES-256-GCM Vault re-encryption, confirmation dialog before clearing history, and complete OS clipboard ghost-clip suppression.
+          draft: false
+          prerelease: false
+          files: release-assets/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
