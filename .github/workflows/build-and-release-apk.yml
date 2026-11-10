@@ -1,0 +1,78 @@
+name: Build & Release ClipVault APK
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK and Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+
+
+      - name: Prepare APK Asset
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.7.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.6.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.5.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.4.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.0.apk
+          echo "APK prepared successfully: $(ls -lh release-assets)"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-APK
+          path: release-assets/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.7
+          name: "ClipVault v1.0.7 - Swipe-to-Delete/Pin, Haptic Copy Animation, Modern Scrollbar & Gradient Brand Header"
+          body: |
+            ### 🚀 ClipVault v1.0.7 Release
+
+            Key interactive features, animations, and bug fixes in this release:
+            - **1. Swipe-to-Delete & Swipe-to-Pin Animation (`SwipeToDismissBox`):** Swipe right on any card to Pin/Unpin with a vibrant Indigo (`#4F46E5`) reveal and bouncy icon animation, or swipe left to Delete with a Crimson (`#EF4444`) reveal and smooth item placement transition.
+            - **2. Haptic Feedback & Copy Bounce Animation:** Triggers tactile `HapticFeedbackType.LongPress` vibration, spring scale bounce (`0.965f` -> `1.0f`), Emerald Green (`#10B981`) border highlight, and a floating dark snackbar whenever a clip is copied, pinned, or deleted.
+            - **3. Smooth Scrolling & Modern Vertical Scrollbar:** Implemented custom `Modifier.drawVerticalScrollbar(lazyListState)` with smooth alpha transitions on the right edge, plus an interactive floating **"Top"** fast-scroller button.
+            - **4. Attractive Gradient Top App Bar:** Styled the `ClipVault` brand title with a multi-stop Cyan-Indigo-Purple gradient brush (`FontWeight.ExtraBold`) inside a glowing accent container and a rounded `38.dp` icon badge with gradient border.
+            - **5. All Critical Bug Fixes & Smart Category Color Coding:** Reliable Android 10–15+ background auto-capture, LTR search bar fix, 12-hour AM/PM timestamps, duplicate prevention, inline clip editing, past date filter, and distinct category badges (`OTP` Amber, `Code` Green, `URL` Cyan, `Color` Pink).
+          draft: false
+          prerelease: false
+          files: release-assets/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
