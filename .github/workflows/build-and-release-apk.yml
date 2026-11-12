@@ -1,0 +1,95 @@
+name: Build & Release ClipVault APK
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK and Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+
+
+      - name: Prepare APK Asset
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.8.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.7.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.6.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.5.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.4.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.1.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.1.2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.1.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.1.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.9.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.8.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.7.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.6.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.5.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.4.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.0.apk
+          echo "APK prepared successfully: $(ls -lh release-assets)"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-APK
+          path: release-assets/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.2.8
+          name: "ClipVault v1.2.8 - Global Background Copy Capture via ClipAccessibilityService"
+          body: |
+            ### 🚀 ClipVault v1.2.8 Release (Build 23)
+
+            AccessibilityService-Based Global Background Copy & Selection Capture:
+            - **1. `accessibility_service_config.xml`:**
+              - Configured `canRetrieveWindowContent="true"` and global accessibility flags (`typeViewTextSelectionChanged`, `typeViewClicked`, `typeWindowStateChanged`, `typeWindowContentChanged`, `typeNotificationStateChanged`).
+            - **2. `ClipAccessibilityService.kt` (`Channel<QueuedClip>(Channel.UNLIMITED)` + `Mutex` Queue):**
+              - Overrides `onAccessibilityEvent()` to capture selected text (`TYPE_VIEW_TEXT_SELECTION_CHANGED`), detect Copy button clicks (`TYPE_VIEW_CLICKED`), and detect clipboard toasts/overlays globally without opening the app.
+              - Enqueues every captured clip into an unbounded Coroutine `Channel` and inserts sequentially into Room `ClipDao` under `mutex.withLock`.
+            - **3. `AndroidManifest.xml` & 1-Tap In-App Enable Banner:**
+              - Declared `ClipAccessibilityService` with `android.permission.BIND_ACCESSIBILITY_SERVICE` and added a 1-tap "Enable Background Auto-Capture" prompt on the Home screen and in Settings.
+          draft: false
+          prerelease: false
+          files: release-assets/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
