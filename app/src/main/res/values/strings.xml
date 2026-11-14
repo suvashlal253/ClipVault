@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">ClipVault</string>
+    <string name="tile_clip_capture">Clip Capture</string>
+    <string name="ime_name">ClipVault Keyboard</string>
+    <string name="ime_subtype_en_us">English (US) - ClipVault QWERTY</string>
+    <string name="ime_subtype_bn_bd">বাংলা (Bangla Phonetic) - ClipVault</string>
+    <string name="accessibility_service_description">Monitors system clipboard when permitted to auto-save copied text into your local ClipVault history.</string>
+</resources>
