@@ -1,0 +1,115 @@
+name: Build & Release ClipVault APK
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK and Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Run Unit Tests & Build Debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew testDebugUnitTest assembleDebug --stacktrace
+
+
+      - name: Prepare APK Asset
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.7.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.7.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.6.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.5.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.4.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.3.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.9.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.8.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.7.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.6.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.5.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.4.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.2.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.1.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.1.2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.1.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.1.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.9.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.8.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.7.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.6.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.5.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.4.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/ClipVault-v1.0.0.apk
+          echo "APK prepared successfully: $(ls -lh release-assets)"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-APK
+          path: release-assets/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.7.1
+          name: "ClipVault v1.7.1 - Critical Bug Fix & Stability Patch (Build 31)"
+          body: |
+            ### 🛠️ ClipVault v1.7.1 — Critical Bug Fix & Stability Patch (Build 31)
+
+            Complete implementation of all 10 source-audit fixes:
+            - **1. Unified Settings Preference Keys (SettingsDialog.kt & ClipVaultInputMethodService.kt):**
+              - Unified keyboard_key_popup_preview and keyboard_high_contrast_accessibility across UI and IME service with non-destructive legacy preference migration.
+              - Verified turning Key Pop-up OFF disables the preview and turning High Contrast ON increases key border contrast (2dp high-contrast borders).
+            - **2. Personal Dictionary Auto-Saving Fix (BengaliSuggestionEngine.kt & BengaliUserDictionary.kt):**
+              - Tapping a suggestion in the candidate bar no longer auto-creates Personal Dictionary entries (onCandidateSelectedByUser updates adaptive ranking only via recordAdaptiveCandidateSelection).
+              - Only explicit user actions (+ Save chip or Personal Dictionary dialog in Settings) add entries to personalEntries.
+            - **3. Real Mixed-Sentence Suggestions in Keyboard Workflow (BengaliPhoneticEngine.kt, BengaliSuggestionEngine.kt, ClipVaultInputMethodService.kt):**
+              - Connected generateMixedSentenceCandidates() directly into BengaliSuggestionEngine.getSuggestions() and ClipVaultInputMethodService.commitSelectedCandidate() using CandidateSource.MIXED_SENTENCE and replacePrecedingSentenceChars.
+              - Surfaces আমি tomorrow office যাব, আমি আগামীকাল অফিস যাব, and আমি tomorrow অফিস যাব for ami tomorrow office jabo while preserving punctuation/spacing and never translating/transliterating unknown English words.
+            - **4. Undo/Redo Session Safety (KeyboardUndoRedoManager in BengaliCandidate.kt & ClipVaultInputMethodService.kt):**
+              - Treats fieldId == 0 as a valid editor field ID and isolates sessions via EditorSessionIdentity(packageName, fieldId, inputType, sessionId) and restarting.
+              - Clears history when switching between two editors where both have fieldId == 0, when switching applications, or when entering password/sensitive fields; handles selection replacements (recordSelectionReplacement) and blocks unsafe undo/redo during active multi-character selections.
+            - **5. Genuine v1.6.0 Personal Dictionary Migration (BengaliUserDictionary.kt):**
+              - Idempotent, non-destructive migration from v1.6.0 keys (personal_words_tsv, custom_shortcuts_tsv, seeded_v160_defaults) to v1.7.1 keys (personal_words_v171_tsv, custom_shortcuts_v171_tsv, migration_v171_complete) filtering unmodified demo defaults while preserving all user-created and user-modified entries without deleting legacy keys or overwriting newer v1.7.1 entries.
+            - **6. Improved Bengali Auto-Correction (BengaliWordDictionary.kt & BengaliSuggestionEngine.kt):**
+              - Added common Banglish typo corrections, Bengali Unicode spelling corrections (ভূল → ভুল, মানুস → মানুষ, পরিক্ষা → পরীক্ষা), and ambiguous word alternatives (কি ↔ কী, কোন ↔ কোনো, কারন ↔ কারণ) while always retaining the original typed word as a candidate and defaulting to Suggestion-First (autoApplyOnSpace = false).
+            - **7. Bengali Font Rendering, Accessibility & Crash Isolation:**
+              - Enabled isElegantTextHeight = true (API 28+), includeFontPadding = true, and Paint.SUBPIXEL_TEXT_FLAG for proper rendering of কার, ফলা, যুক্তাক্ষর, হসন্ত, Bengali numerals, and দাড়ি (।).
+              - Atomic TalkBack focus hierarchy on key cells (inner labels hidden from accessibility tree) with zero per-keystroke announcement spam.
+              - SafeInputConnectionExecutor catches recoverable Exceptions only (never catching fatal JVM Errors), resets invalid composing state cleanly, and never logs user typed text.
+          draft: false
+          prerelease: false
+          files: release-assets/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
