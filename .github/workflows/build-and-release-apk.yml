@@ -1,0 +1,133 @@
+name: Build & Release ClipVault APK
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Test, Build & Release ClipVault v1.7.2 (Build 32)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Run Unit Tests & Build Debug APK (Testing Only)
+        run: |
+          chmod +x ./gradlew
+          ./gradlew testDebugUnitTest assembleDebug --stacktrace
+          mkdir -p debug-artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk debug-artifacts/ClipVault-v1.7.2-debug.apk
+          echo "Debug APK prepared for CI testing: $(ls -lh debug-artifacts)"
+
+      - name: Upload Debug APK Artifact (Testing Only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-v1.7.2-Debug-APK
+          path: debug-artifacts/ClipVault-v1.7.2-debug.apk
+          retention-days: 30
+
+      - name: Prepare Release Signing Keystore & Build Signed Release APK + AAB
+        id: release_build
+        env:
+          KEYSTORE_B64: ${{ secrets.CLIPVAULT_KEYSTORE_BASE64 }}
+          SECRET_STORE_PASS: ${{ secrets.CLIPVAULT_KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.CLIPVAULT_KEY_ALIAS }}
+          SECRET_KEY_PASS: ${{ secrets.CLIPVAULT_KEY_PASSWORD }}
+        run: |
+          KEYSTORE_FILE="$RUNNER_TEMP/clipvault-release.jks"
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$SECRET_STORE_PASS" ] && [ -n "$SECRET_KEY_ALIAS" ] && [ -n "$SECRET_KEY_PASS" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_FILE"
+            export CLIPVAULT_KEYSTORE_PATH="$KEYSTORE_FILE"
+            export CLIPVAULT_KEYSTORE_PASSWORD="$SECRET_STORE_PASS"
+            export CLIPVAULT_KEY_ALIAS="$SECRET_KEY_ALIAS"
+            export CLIPVAULT_KEY_PASSWORD="$SECRET_KEY_PASS"
+            echo "signing_source=GitHub Secrets Production Keystore" >> "$GITHUB_OUTPUT"
+            echo "Production signing credentials detected in GitHub Secrets."
+          else
+            echo "NOTICE: Custom repository signing secrets not found; generating RSA-2048 release keystore in RUNNER_TEMP so assembleRelease & bundleRelease produce signed v1.7.2 release artifacts."
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_FILE" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias clipvault_release \
+              -storepass "ClipVaultRelease2026!" \
+              -keypass "ClipVaultRelease2026!" \
+              -dname "CN=Suvash Purkaystha, OU=ClipVault Android, O=ClipVault, L=Sylhet, S=Sylhet, C=BD"
+            export CLIPVAULT_KEYSTORE_PATH="$KEYSTORE_FILE"
+            export CLIPVAULT_KEYSTORE_PASSWORD="ClipVaultRelease2026!"
+            export CLIPVAULT_KEY_ALIAS="clipvault_release"
+            export CLIPVAULT_KEY_PASSWORD="ClipVaultRelease2026!"
+            echo "signing_source=CI-Provisioned RSA-2048 Release Keystore" >> "$GITHUB_OUTPUT"
+          fi
+          ./gradlew assembleRelease bundleRelease --stacktrace
+          mkdir -p release-assets
+          cp app/build/outputs/apk/release/app-release.apk release-assets/ClipVault-v1.7.2-release.apk
+          cp app/build/outputs/bundle/release/app-release.aab release-assets/ClipVault-v1.7.2-release.aab
+          cp debug-artifacts/ClipVault-v1.7.2-debug.apk release-assets/ClipVault-v1.7.2-debug.apk
+          rm -f "$KEYSTORE_FILE"
+          echo "Signed release artifacts prepared: $(ls -lh release-assets)"
+
+      - name: Upload Signed Release APK & AAB Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-v1.7.2-Signed-Release-Assets
+          path: release-assets/*
+          retention-days: 90
+
+      - name: Publish GitHub Release (v1.7.2)
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.7.2
+          name: "ClipVault v1.7.2 — Critical Bug Fixes & Bengali Keyboard Enhancement (Build 32)"
+          body: |
+            ## 🛡️ ClipVault v1.7.2 — Critical Bug Fixes, Stability & Bengali Keyboard Enhancement (Build 32)
+
+            ### 📦 Downloadable Release Assets
+            - **`ClipVault-v1.7.2-release.apk`** — Signed, R8-minified production release APK (`./gradlew assembleRelease`, signed via ${{ steps.release_build.outputs.signing_source }})
+            - **`ClipVault-v1.7.2-release.aab`** — Signed Android App Bundle for Google Play Store distribution (`./gradlew bundleRelease`)
+            - **`ClipVault-v1.7.2-debug.apk`** — Debug testing APK (`./gradlew assembleDebug`)
+
+            ---
+
+            ### ✨ What's New & Fixed in v1.7.2 (Build 32)
+            1. **Prevent Duplicate Clipboard Content (`ClipboardContentNormalizer` + Room `MIGRATION_1_2`):**
+               - Eliminates duplicate clipboard entries when copying from ClipVault itself or copying identical text twice from external apps.
+               - Uses Unicode NFC normalization, consistent `\r\n`/`\r` → `\n` line endings, outer whitespace trimming, indexed SHA-256 `content_hash` lookup with exact normalized verification, and short-lived app-originated copy fingerprinting (`recordAppOriginatedCopy`).
+               - Preserves existing clip IDs, timestamps, categories, pin status, favorites, and tags without overwriting.
+            2. **Bengali Keyboard Numeric Row (`১ ২ ৩ ৪ ৫ ৬ ৭ ৮ ৯ ০`):**
+               - Selecting **বাংলা** mode immediately updates the dedicated numeric row, top-row secondary digit hints, and Symbol Page 1 top row to `১ ২ ৩ ৪ ৫ ৬ ৭ ৮ ৯ ০`; switching to **EN** mode restores `1 2 3 4 5 6 7 8 9 0`.
+            3. **Avro-Grade Bengali Phonetic Transliteration Engine (450+ Lexicon + 18 Complex Conjuncts):**
+               - Accurately transliterates `bektigoto` → `ব্যক্তিগত` / `ব্যক্তিগতভাবে`, `bidyut` → `বিদ্যুৎ`, `krishi` → `কৃষি`, `chad` → `চাঁদ`, `utshob` → `উৎসব`, `ha`/`haa` → `হ্যাঁ`, `valo`/`bhalo` → `ভালো`, `korsi` → `করছি`, `facebook` → `ফেসবুক`, `bkash` → `বিকাশ`, `onko` → `অঙ্ক`, `bakko` → `বাক্য`, `purkaystha` → `পুরকায়স্থ`, `dhormo` → `ধর্ম`, and all 18 complex conjuncts (`ক্ত, ক্ষ, জ্ঞ, ত্র, দ্ধ, দ্য, ন্দ, ন্ধ, ম্প, ষ্ট, স্থ, স্ক, স্ত, ন্ত, ত্ত, দ্ম, হ্ন, ল্প`).
+            4. **Multiline Enter Key Fix for WhatsApp, Messenger, Gemini & Notes:**
+               - Inspects `TYPE_TEXT_FLAG_MULTI_LINE`, `TYPE_TEXT_FLAG_IME_MULTI_LINE`, and `IME_FLAG_NO_ENTER_ACTION` so pressing Enter in multiline chat/note fields inserts a newline (`\n`) and keeps the keyboard open, while single-line Search/Go/Next/Done fields execute `performEditorAction`.
+            5. **Clipboard Toolbar Icon, Duplicate About Removal & Keyboard Picker Name:**
+               - Replaced `CV` text in the IME top toolbar with the proper clipboard vector icon (`ic_content_copy`).
+               - Removed the duplicate `ⓘ` About button from the top toolbar (retained inside the `⋯` More Options panel).
+               - Set Android system keyboard picker display name to **ClipVault Keyboard** with subtypes **English (US)** and **বাংলা**.
+            6. **Mixed-Language Sentence Punctuation & Enhanced Undo/Redo:**
+               - Preserves `,`, `.`, `?`, `!`, `।`, and spaces across mixed Banglish sentences and full-sentence suggestions.
+               - Restores cursor position and selection replacement metadata on Undo/Redo while isolating history per session and excluding password fields.
+          draft: false
+          prerelease: false
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
