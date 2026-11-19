@@ -1,0 +1,307 @@
+name: Build & Release ClipVault APK
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*.*.*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-debug:
+    name: Run Unit Tests & Build Debug APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Run Unit Tests & Build Debug APK (No Production Keystore Required)
+        run: |
+          chmod +x ./gradlew
+          ./gradlew testDebugUnitTest assembleDebug --stacktrace
+          VERSION_NAME=$(grep -E 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          mkdir -p debug-artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk "debug-artifacts/ClipVault-v${VERSION_NAME}-debug.apk"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-Debug-APK
+          path: debug-artifacts/*.apk
+          retention-days: 30
+
+  release:
+    name: Build & Publish Production Signed Release (Tag Only)
+    needs: verify-and-debug
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Git Tag & Gradle Version Consistency
+        id: version_check
+        run: |
+          GIT_TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$GIT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag '$GIT_TAG'. Expected semantic version tag matching vX.Y.Z (e.g. v1.7.4)."
+            exit 1
+          fi
+          EXPECTED_VERSION="${GIT_TAG#v}"
+          GRADLE_VERSION_NAME=$(grep -E 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          GRADLE_VERSION_CODE=$(grep -E 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | head -n 1 | sed -E 's/.*=\s*([0-9]+).*/\1/')
+          echo "Git tag: $GIT_TAG | Gradle versionName: $GRADLE_VERSION_NAME | Gradle versionCode: $GRADLE_VERSION_CODE"
+          if [ "$EXPECTED_VERSION" != "$GRADLE_VERSION_NAME" ]; then
+            echo "::error::Version mismatch: Git tag '$GIT_TAG' expects versionName '$EXPECTED_VERSION', but app/build.gradle.kts has versionName '$GRADLE_VERSION_NAME'."
+            exit 1
+          fi
+          if [ -z "$GRADLE_VERSION_CODE" ] || [ "$GRADLE_VERSION_CODE" -lt 34 ]; then
+            echo "::error::Invalid Gradle versionCode '$GRADLE_VERSION_CODE' in app/build.gradle.kts (expected >= 34 for v1.7.4+)."
+            exit 1
+          fi
+          echo "tag_name=$GIT_TAG" >> "$GITHUB_OUTPUT"
+          echo "version_name=$GRADLE_VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$GRADLE_VERSION_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Require Permanent Production Keystore Secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.CLIPVAULT_KEYSTORE_BASE64 }}
+          SECRET_STORE_PASS: ${{ secrets.CLIPVAULT_KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.CLIPVAULT_KEY_ALIAS }}
+          SECRET_KEY_PASS: ${{ secrets.CLIPVAULT_KEY_PASSWORD }}
+        run: |
+          MISSING_SECRETS=()
+          [ -z "$KEYSTORE_B64" ] && MISSING_SECRETS+=("CLIPVAULT_KEYSTORE_BASE64")
+          [ -z "$SECRET_STORE_PASS" ] && MISSING_SECRETS+=("CLIPVAULT_KEYSTORE_PASSWORD")
+          [ -z "$SECRET_KEY_ALIAS" ] && MISSING_SECRETS+=("CLIPVAULT_KEY_ALIAS")
+          [ -z "$SECRET_KEY_PASS" ] && MISSING_SECRETS+=("CLIPVAULT_KEY_PASSWORD")
+          if [ ${#MISSING_SECRETS[@]} -ne 0 ]; then
+            echo "::error::Production release signing aborted safely. Missing required GitHub Secrets: ${MISSING_SECRETS[*]}. Ephemeral or fallback keystores are strictly prohibited."
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Decode Keystore, Verify Upgrade Continuity, Build & Verify Signed APK + AAB
+        env:
+          KEYSTORE_B64: ${{ secrets.CLIPVAULT_KEYSTORE_BASE64 }}
+          CLIPVAULT_KEYSTORE_PASSWORD: ${{ secrets.CLIPVAULT_KEYSTORE_PASSWORD }}
+          CLIPVAULT_KEY_ALIAS: ${{ secrets.CLIPVAULT_KEY_ALIAS }}
+          CLIPVAULT_KEY_PASSWORD: ${{ secrets.CLIPVAULT_KEY_PASSWORD }}
+          EXPECTED_CERT_SHA256_SECRET: ${{ secrets.CLIPVAULT_EXPECTED_CERT_SHA256 }}
+          VERSION_TAG: ${{ steps.version_check.outputs.tag_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEYSTORE_FILE="$RUNNER_TEMP/clipvault-production-release.jks"
+          trap 'rm -f "$KEYSTORE_FILE" "$RUNNER_TEMP/previous-production.apk"' EXIT
+
+          echo "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_FILE"
+          if [ ! -s "$KEYSTORE_FILE" ]; then
+            echo "::error::Decoded CLIPVAULT_KEYSTORE_BASE64 is empty or invalid."
+            exit 1
+          fi
+
+          # Locate Android SDK apksigner binary
+          APKSIGNER_BIN=$(find "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools" -name "apksigner" -type f 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$APKSIGNER_BIN" ] || [ ! -x "$APKSIGNER_BIN" ]; then
+            echo "::error::Android SDK apksigner tool not found under ANDROID_HOME/build-tools."
+            exit 1
+          fi
+
+          # 1. Extract permanent production keystore certificate SHA-256 fingerprint
+          KEYSTORE_CERT_SHA256=$(keytool -list -v \
+            -keystore "$KEYSTORE_FILE" \
+            -alias "$CLIPVAULT_KEY_ALIAS" \
+            -storepass "$CLIPVAULT_KEYSTORE_PASSWORD" 2>/dev/null \
+            | grep -iE "SHA256:|SHA-256:" | head -n 1 \
+            | sed -E 's/.*(SHA256|SHA-256):\s*//I' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+
+          if [[ ! "$KEYSTORE_CERT_SHA256" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "::error::Failed to extract valid SHA-256 signing certificate fingerprint from production keystore for alias '$CLIPVAULT_KEY_ALIAS'."
+            exit 1
+          fi
+          echo "Production keystore certificate SHA-256: $KEYSTORE_CERT_SHA256"
+
+          # Optional pinned certificate secret verification
+          if [ -n "$EXPECTED_CERT_SHA256_SECRET" ]; then
+            NORMALIZED_EXPECTED=$(echo "$EXPECTED_CERT_SHA256_SECRET" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+            if [ "$KEYSTORE_CERT_SHA256" != "$NORMALIZED_EXPECTED" ]; then
+              echo "::error::Keystore certificate SHA-256 ($KEYSTORE_CERT_SHA256) does not match CLIPVAULT_EXPECTED_CERT_SHA256 ($NORMALIZED_EXPECTED)."
+              exit 1
+            fi
+          fi
+
+          # 2. Preserve Upgrade Compatibility: compare against previously distributed production APK if one exists
+          RELEASES_JSON=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=10" || echo "[]")
+          PREV_APK_URL=$(echo "$RELEASES_JSON" | python3 -c "
+          import sys, json
+          releases = json.load(sys.stdin)
+          if isinstance(releases, list):
+              for r in releases:
+                  if r.get('draft') or r.get('prerelease'):
+                      continue
+                  for a in r.get('assets', []):
+                      name = a.get('name', '')
+                      if name.endswith('.apk') and 'debug' not in name.lower():
+                          print(r.get('tag_name', 'unknown') + '|' + a.get('browser_download_url', ''))
+                          sys.exit(0)
+          " || true)
+
+          if [ -n "$PREV_APK_URL" ]; then
+            PREV_TAG="${PREV_APK_URL%%|*}"
+            PREV_URL="${PREV_APK_URL#*|}"
+            echo "Inspecting previously distributed production APK from release '$PREV_TAG' for signing identity continuity..."
+            if ! curl -fsSL -L -o "$RUNNER_TEMP/previous-production.apk" "$PREV_URL"; then
+              echo "::error::Signing identity continuity cannot be verified: failed to download previous release APK from '$PREV_TAG'."
+              exit 1
+            fi
+            PREV_APK_CERT_SHA256=$("$APKSIGNER_BIN" verify --print-certs "$RUNNER_TEMP/previous-production.apk" 2>/dev/null \
+              | grep -i "SHA-256 digest:" | head -n 1 \
+              | sed -E 's/.*SHA-256 digest:\s*//I' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]' || true)
+            if [[ ! "$PREV_APK_CERT_SHA256" =~ ^[0-9A-F]{64}$ ]]; then
+              echo "::error::Signing identity continuity cannot be verified: could not extract SHA-256 certificate fingerprint from previously distributed APK ('$PREV_TAG')."
+              exit 1
+            fi
+            echo "Previous release ('$PREV_TAG') APK certificate SHA-256: $PREV_APK_CERT_SHA256"
+            if [ "$PREV_APK_CERT_SHA256" != "$KEYSTORE_CERT_SHA256" ]; then
+              echo "::error::Upgrade compatibility failure! Current production keystore SHA-256 ($KEYSTORE_CERT_SHA256) does NOT match previously distributed release '$PREV_TAG' APK SHA-256 ($PREV_APK_CERT_SHA256). Android cannot upgrade an existing installation signed with a different certificate."
+              exit 1
+            fi
+            echo "Upgrade compatibility verified: production certificate matches previously distributed APK ('$PREV_TAG')."
+          else
+            echo "::notice::No previously distributed production release APK found in GitHub Releases; signing identity continuity baseline is $KEYSTORE_CERT_SHA256."
+          fi
+
+          # 3. Build signed Release APK and Release AAB using the permanent production keystore
+          export CLIPVAULT_KEYSTORE_PATH="$KEYSTORE_FILE"
+          chmod +x ./gradlew
+          ./gradlew assembleRelease bundleRelease --stacktrace
+
+          RELEASE_APK="app/build/outputs/apk/release/app-release.apk"
+          RELEASE_AAB="app/build/outputs/bundle/release/app-release.aab"
+
+          if [ ! -f "$RELEASE_APK" ]; then
+            echo "::error::Release APK was not generated at $RELEASE_APK."
+            exit 1
+          fi
+          if [ ! -f "$RELEASE_AAB" ]; then
+            echo "::error::Release AAB was not generated at $RELEASE_AAB."
+            exit 1
+          fi
+
+          # 4. Verify Release APK signature with apksigner and extract certificate SHA-256 fingerprint
+          if ! APKSIGNER_OUT=$("$APKSIGNER_BIN" verify --verbose --print-certs "$RELEASE_APK" 2>&1); then
+            echo "$APKSIGNER_OUT"
+            echo "::error::apksigner verification FAILED for generated Release APK ($RELEASE_APK)."
+            exit 1
+          fi
+          echo "$APKSIGNER_OUT"
+          APK_CERT_SHA256=$(echo "$APKSIGNER_OUT" | grep -i "SHA-256 digest:" | head -n 1 \
+            | sed -E 's/.*SHA-256 digest:\s*//I' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          if [[ ! "$APK_CERT_SHA256" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "::error::Failed to extract valid SHA-256 certificate fingerprint from signed Release APK."
+            exit 1
+          fi
+
+          # 5. Verify Release AAB signature with jarsigner and extract certificate SHA-256 fingerprint
+          JARSIGNER_LOG="$RUNNER_TEMP/jarsigner-aab.log"
+          if ! jarsigner -verify -verbose -certs "$RELEASE_AAB" > "$JARSIGNER_LOG" 2>&1; then
+            tail -n 60 "$JARSIGNER_LOG" || true
+            echo "::error::jarsigner verification FAILED for generated Release AAB ($RELEASE_AAB)."
+            exit 1
+          fi
+          if ! grep -q "jar verified." "$JARSIGNER_LOG"; then
+            tail -n 60 "$JARSIGNER_LOG" || true
+            echo "::error::Release AAB ($RELEASE_AAB) is missing a valid JAR signature."
+            exit 1
+          fi
+          grep -E "Signed by|Digest algorithm|Signature algorithm|jar verified" "$JARSIGNER_LOG" || true
+
+          AAB_CERT_LOG="$RUNNER_TEMP/aab-cert.log"
+          unzip -p "$RELEASE_AAB" "META-INF/*.RSA" "META-INF/*.DSA" "META-INF/*.EC" 2>/dev/null \
+            | keytool -printcert > "$AAB_CERT_LOG" 2>/dev/null || true
+          if [ ! -s "$AAB_CERT_LOG" ]; then
+            keytool -printcert -jarfile "$RELEASE_AAB" > "$AAB_CERT_LOG" 2>/dev/null || true
+          fi
+          AAB_CERT_SHA256=$(grep -iE "SHA256:|SHA-256:" "$AAB_CERT_LOG" | head -n 1 \
+            | sed -E 's/.*(SHA256|SHA-256):\s*//I' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]' || true)
+          if [[ ! "$AAB_CERT_SHA256" =~ ^[0-9A-F]{64}$ ]]; then
+            cat "$AAB_CERT_LOG" || true
+            echo "::error::Failed to extract valid SHA-256 certificate fingerprint from signed Release AAB."
+            exit 1
+          fi
+
+          # 6. Verify both APK and AAB share the exact same expected signing certificate identity
+          echo "Keystore SHA-256 : $KEYSTORE_CERT_SHA256"
+          echo "Release APK SHA-256: $APK_CERT_SHA256"
+          echo "Release AAB SHA-256: $AAB_CERT_SHA256"
+
+          if [ "$APK_CERT_SHA256" != "$KEYSTORE_CERT_SHA256" ]; then
+            echo "::error::Signing identity mismatch: Release APK SHA-256 ($APK_CERT_SHA256) does not match expected production keystore SHA-256 ($KEYSTORE_CERT_SHA256)."
+            exit 1
+          fi
+          if [ "$AAB_CERT_SHA256" != "$KEYSTORE_CERT_SHA256" ]; then
+            echo "::error::Signing identity mismatch: Release AAB SHA-256 ($AAB_CERT_SHA256) does not match expected production keystore SHA-256 ($KEYSTORE_CERT_SHA256)."
+            exit 1
+          fi
+          if [ "$APK_CERT_SHA256" != "$AAB_CERT_SHA256" ]; then
+            echo "::error::Artifact signing mismatch: Release APK SHA-256 ($APK_CERT_SHA256) != Release AAB SHA-256 ($AAB_CERT_SHA256)."
+            exit 1
+          fi
+
+          mkdir -p release-assets
+          cp "$RELEASE_APK" "release-assets/ClipVault-${VERSION_TAG}-release.apk"
+          cp "$RELEASE_AAB" "release-assets/ClipVault-${VERSION_TAG}-release.aab"
+
+      - name: Upload Production Signed Release Assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipVault-${{ steps.version_check.outputs.tag_name }}-Signed-Release-Assets
+          path: release-assets/*
+          retention-days: 90
+
+      - name: Publish GitHub Release (${{ steps.version_check.outputs.tag_name }})
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version_check.outputs.tag_name }}
+          name: "ClipVault ${{ steps.version_check.outputs.tag_name }} (Build ${{ steps.version_check.outputs.version_code }})"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
